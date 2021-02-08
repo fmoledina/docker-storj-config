@@ -1,0 +1,277 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /data/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+
+## Optional syslog logging to Loki
+# - job_name: system
+#   static_configs:
+#   - targets:
+#       - localhost
+#     labels:
+#       job: varlogs
+#       __path__: /var/log/*log
+
+## Optional systemd journal logging to Loki
+# - job_name: journal
+#   journal:
+#     json: false
+#     max_age: 12h
+#     path: /var/log/journal
+#     labels:
+#       job: systemd-journal
+#   relabel_configs:
+#     - source_labels: ['__journal__systemd_unit']
+#       target_label: 'unit'
+
+## Storj node logging to Loki + Prometheus metrics generation
+## Requires log.encoding="json"
+- job_name: storj
+  loki_push_api:
+    server:
+      http_listen_port: 3500
+      grpc_listen_port: 3600
+    use_incoming_timestamp: true
+  pipeline_stages:
+
+  - json:
+      ## Only grab expressions required for metrics or labels
+      expressions:
+        loglevel: L
+        # timestamp: T   # automatically parsed by Loki
+        message: M
+        messagetype: '"N"'
+        # satellite: '"Satellite ID" || "satellite ID"'   # only used for url label below
+        url: '"Satellite ID" || "satellite ID"' # lowercase is used for failed to settle orders ERROR 
+        # action: Action
+        type: Action
+        error: error
+        # available_space: '"Available Space"'  # may be of future use
+        # size: Size   # may be of future use
+
+  ## Prepend nodename (i.e. compose_service) to beginning of log line item
+  - replace:
+      expression: "(.*)"
+      replace: "{{ .compose_service }}: {{ .Value }}"
+
+  ## Satellite ID replacement with Satellite URL
+  - replace:
+      expression: "(121RTSDpyNZVcEU84Ticf2L1ntiuUimbWgfATz21tuvgk3vzoA6)"
+      source: "url"
+      replace: "asia-east-1.tardigrade.io:7777"
+  - replace:
+      expression: "(12EayRS2V1kEsWESU9QMRseFhdxYxKicsiFmxrsLZHeLUtdps3S)"
+      source: "url"
+      replace: "us-central-1.tardigrade.io:7777"
+  - replace:
+      expression: "(12L9ZFwhzVpuEKMUNUqkaTLGzwY9G24tbiigLiXpmZWKwmcNDDs)"
+      source: "url"
+      replace: "europe-west-1.tardigrade.io:7777"
+  - replace:
+      expression: "(12rfG3sh9NCWiX3ivPjq2HtdLmbqCrvHVEzJubnzFzosMuawymB)"
+      source: "url"
+      replace: "europe-north-1.tardigrade.io:7777"
+  - replace:
+      expression: "(1wFTAgs9DP5RSnCqKV1eLf6N9wtk4EAtmN5DpSxcs8EjT69tGE)"
+      source: "url"
+      replace: "saltlake.tardigrade.io:7777"
+  - replace:
+      expression: "(12tRQrMTWUWwzwGh18i7Fqs67kmdhH9t6aToeiwbo5mfS2rUmo)"
+      source: "url"
+      replace: "us2.tardigrade.io:7777"
+
+  ## Specify 'type' based on Action
+  - replace:
+      expression: "^(PUT|GET)$"
+      source: "type"
+      replace: "usage"
+  - replace:
+      expression: "(PUT_REPAIR|GET_REPAIR)"
+      source: "type"
+      replace: "repair"
+  - replace:
+      expression: "(GET_AUDIT)"
+      source: "type"
+      replace: "audit"
+
+  ## Generate labels to use for Loki and Prometheus queries
+  - labels:
+      loglevel:
+      url:
+      type:
+      # error:
+      message:
+      messagetype:
+      nodename: compose_service
+
+  ## Drop unnecessary labels to reduce log cardinality and/or redundancy with other labels
+  - labeldrop:
+      - filename
+      - compose_service
+      - compose_project
+
+  ## error label, whether simplified or not, is not required in the dashboard
+  ## workaround for all unique write tcp error messages..
+  # - match:
+  #     selector: '{loglevel="ERROR"} |= "download failed" != "GET_AUDIT"'
+  #     stages:
+  #     - template:
+  #         source: error
+  #         template: 'use of closed network connection'
+  #     - labels:
+  #         error:
+
+  ## Generate Prometheus metrics that are exposed by promtail
+  - metrics:
+
+      ## Deletes
+      delete_successful:
+        type: Counter
+        description: "Total number of deleted pieces"
+        prefix: storj_pieces_
+        max_idle_duration: 24h
+        source: message
+        config:
+          value: "deleted"
+          action: inc
+      delete_failed:
+        type: Counter
+        description: "Total number of failed deletes"
+        prefix: storj_pieces_
+        max_idle_duration: 24h
+        source: message
+        config:
+          value: "delete failed"
+          action: inc
+      
+      ## Uploads
+      upload_started:
+        type: counter
+        description: "Total number of uploads started"
+        prefix: storj_pieces_
+        max_idle_duration: 24h
+        source: message
+        config:
+          value: "upload started"
+          action: inc
+      upload_successful:
+        type: counter
+        description: "Total number of successful uploads"
+        prefix: storj_pieces_
+        max_idle_duration: 24h
+        source: message
+        config:
+          value: "uploaded"
+          action: inc
+      upload_canceled:
+        type: counter
+        description: "Total number of canceled uploads"
+        prefix: storj_pieces_
+        max_idle_duration: 24h
+        source: message
+        config:
+          value: "upload canceled"
+          action: inc
+      upload_rejected:
+        type: counter
+        description: "Total number of rejected uploads"
+        prefix: storj_pieces_
+        max_idle_duration: 24h
+        source: message
+        config:
+          value: "upload rejected"
+          action: inc
+      upload_failed:
+        type: counter
+        description: "Total number of failed uploads"
+        prefix: storj_pieces_
+        max_idle_duration: 24h
+        source: message
+        config:
+          value: "upload failed"
+          action: inc
+
+      ## Downloads
+      download_started:
+        type: counter
+        description: "Total number of downloads started"
+        prefix: storj_pieces_
+        max_idle_duration: 24h
+        source: message
+        config:
+          value: "download started"
+          action: inc
+      download_successful:
+        type: counter
+        description: "Total number of successful downloads"
+        prefix: storj_pieces_
+        max_idle_duration: 24h
+        source: message
+        config:
+          value: "downloaded"
+          action: inc
+      download_canceled:
+        type: counter
+        description: "Total number of canceled downloads"
+        prefix: storj_pieces_
+        max_idle_duration: 24h
+        source: message
+        config:
+          value: "download canceled"
+          action: inc
+      download_failed:
+        type: counter
+        description: "Total number of failed downloads"
+        prefix: storj_pieces_
+        max_idle_duration: 24h
+        source: message
+        config:
+          value: "download failed"
+          action: inc
+
+      ## Log levels count
+      levels:
+        type: counter
+        description: "Total number of loglevel messages in log"
+        prefix: storj_log_
+        max_idle_duration: 24h
+        source: loglevel
+        config:
+          match_all: true
+          action: inc
+      errors:
+        type: counter
+        description: "Total number of error messages in log and their message value"
+        prefix: storj_log_
+        max_idle_duration: 24h
+        source: loglevel
+        config:
+          value: ERROR
+          action: inc
+
+  ## Corrected error query
+  - match:
+      selector: '{loglevel="ERROR"} !~ "(\\.*)(gracefulexit:service\"\\,\"M\":\"failed to get satellite address)" !~ "(\\.*)(servers\"\\,\"M\":\"unexpected shutdown of a runner)"  | type != "usage" and type != "repair"'
+      stages:
+      - template:
+          source: errorCorrected
+          template: 'corrected'
+      - labels:
+          errorCorrected:
+      - metrics:
+          errors_corr:
+            type: counter
+            description: "Corrected total number of error messages"
+            prefix: storj_log_
+            max_idle_duration: 24h
+            source: loglevel
+            config:
+              match_all: true
+              action: inc

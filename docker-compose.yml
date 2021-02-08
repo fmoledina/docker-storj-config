@@ -1,0 +1,132 @@
+x-storjcommon: &storjcommon
+  image: storjlabs/storagenode:latest
+  restart: "no"
+  logging:
+    driver: loki
+    options:
+      loki-url: "http://172.18.0.251:3500/loki/api/v1/push"
+      loki-external-labels: job=storj
+  environment:
+    - WALLET
+    - EMAIL
+  networks:
+    - storjnet
+  stop_grace_period: 300s
+
+x-exportercommon: &exportercommon
+  image: anclrii/storj-exporter:latest
+  networks:
+    - storjnet
+  restart: always
+
+version: "3.8"
+services:
+
+  ## Storj node and Storj-Exporter services. Create additional services based on these for multiple nodes
+  storj01:
+    <<: *storjcommon
+    ports:
+      - "${STORJ01_LISTEN_PORT}:28967"
+      - "${STORJ01_DASHBOARD_PORT}:14002"
+    volumes:
+      - type: bind
+        source: ${STORJ01_IDENTITY_BIND_MOUNT}
+        target: /app/identity
+        read_only: true
+      - type: bind
+        source: ${STORJ01_CONFIG_BIND_MOUNT}
+        target: /app/config
+      # - type: bind
+      #   source: ${STORJ01_DBS_BIND_MOUNT}  # only if using dedicated dbs directory separate from /app/config inside container
+      #   target: /app/dbs
+    env_file:
+      - storj01.env
+
+  exporter01:
+    <<: *exportercommon
+    # ports: # not required if storj-exporter and prometheus are on the same Docker bridge network as in this example
+    #   - "9651:9651"
+    environment:
+      - STORJ_HOST_ADDRESS=storj01
+      - STORJ_API_PORT=14002
+
+  ## Remaining services require only one instance for all nodes
+  watchtower:
+    restart: always
+    image: storjlabs/watchtower
+    networks:
+      - storjnet
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --stop-timeout 300s
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - "./appconfig/prometheus:/etc/prometheus"
+      - ${PROMETHEUS_BIND_MOUNT}:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    networks:
+      - storjnet
+    restart: always
+
+  promtail:
+    image: grafana/promtail:2.1.0
+    ports:
+      - "9080:9080"
+      - "3500:3500"
+    restart: "no"
+    volumes:
+      - ./appconfig/promtail:/config
+      - ${PROMTAIL_BIND_MOUNT}:/data
+    command: -config.file=/config/config.yml
+    networks:
+      storjnet:
+        ipv4_address: 172.18.250.251
+
+  loki:
+    image: grafana/loki:2.1.0
+    ports:
+      - "3100:3100"
+    restart: "no"
+    volumes:
+      - "./appconfig/loki:/config"
+      - ${LOKI_BIND_MOUNT}:/data
+    command: -config.file=/config/local-config.yaml
+    depends_on: 
+      - promtail
+    networks:
+      storjnet:
+        ipv4_address: 172.16.250.250
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana
+  restart: "no"
+    ports: 
+      - "3000:3000"
+    volumes:
+      - "./appconfig/grafana/provisioning:/etc/grafana/provisioning"
+      - ${GRAFANA_BIND_MOUNT}:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD
+      - GF_USERS_ALLOW_SIGN_UP
+      - GF_INSTALL_PLUGINS
+    networks:
+      - storjnet
+    depends_on:
+      - prometheus
+      - loki
+
+networks:
+  storjnet:
+    ipam:
+      driver: default
+      config:
+        - subnet: "172.16.250.0/24"
