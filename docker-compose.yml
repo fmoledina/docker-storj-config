@@ -4,7 +4,7 @@ x-storjcommon: &storjcommon
   logging:
     driver: loki
     options:
-      loki-url: "http://172.18.0.251:3500/loki/api/v1/push"
+      loki-url: "http://172.16.250.251:3500/loki/api/v1/push"
       loki-external-labels: job=storj
   environment:
     - WALLET
@@ -88,7 +88,7 @@ services:
     command: -config.file=/config/config.yml
     networks:
       storjnet:
-        ipv4_address: 172.18.250.251
+        ipv4_address: 172.16.250.251
 
   loki:
     image: grafana/loki:2.1.0
