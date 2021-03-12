@@ -150,6 +150,15 @@ scrape_configs:
         config:
           value: "delete failed"
           action: inc
+      delete_expired:
+        type: Counter
+        description: "Total number of expired deletes"
+        prefix: storj_pieces_
+        max_idle_duration: 24h
+        source: message
+        config:
+          value: "delete expired"
+          action: inc
       
       ## Uploads
       upload_started:
